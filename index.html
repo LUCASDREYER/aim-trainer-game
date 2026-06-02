@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aim Trainer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <canvas id="canvas"></canvas>
+
+  <div id="hud">
+    <div class="stat">
+      <span class="stat-label">Score</span>
+      <span class="stat-val" id="score-val">0</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Accuracy</span>
+      <span class="stat-val" id="acc-val">—</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Streak</span>
+      <span class="stat-val" id="streak-val">0</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Avg ms</span>
+      <span class="stat-val" id="react-val">—</span>
+    </div>
+    <div class="stat">
+      <span class="stat-label">Time</span>
+      <span class="stat-val" id="timer-val">30</span>
+    </div>
+  </div>
+
+  <div id="combo-flash"></div>
+  <div id="miss-flash"></div>
+
+  <div id="overlay">
+    <h1>🎯 AIM TRAINER</h1>
+    <p id="overlay-sub">Click targets as fast as you can. Don't miss!</p>
+    <div id="results-area"></div>
+    <div>
+      <p style="font-size:12px;color:#666;text-align:center;margin-bottom:8px;">DIFFICULTY</p>
+      <div id="difficulty">
+        <button class="diff-btn" data-d="easy">Easy</button>
+        <button class="diff-btn active" data-d="medium">Medium</button>
+        <button class="diff-btn" data-d="hard">Hard</button>
+      </div>
+    </div>
+    <button id="start-btn">Start Game</button>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
