@@ -3,12 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Aim Trainer</title>
+  <title>FPS Aim Trainer</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
+  <!-- 3D scene renders here -->
   <canvas id="canvas"></canvas>
+
+  <!-- Fixed first-person crosshair -->
+  <div id="crosshair">
+    <span class="ch-line ch-up"></span>
+    <span class="ch-line ch-down"></span>
+    <span class="ch-line ch-left"></span>
+    <span class="ch-line ch-right"></span>
+    <span class="ch-dot"></span>
+  </div>
+
+  <!-- Muzzle flash / hitmarker -->
+  <div id="hitmarker">
+    <span></span><span></span><span></span><span></span>
+  </div>
+  <div id="miss-flash"></div>
 
   <div id="hud">
     <div class="stat">
@@ -34,23 +50,44 @@
   </div>
 
   <div id="combo-flash"></div>
-  <div id="miss-flash"></div>
+
+  <!-- Shown while playing but pointer-lock dropped (e.g. pressed Esc) -->
+  <div id="pause-hint">Click to resume — move mouse to aim, click to shoot</div>
 
   <div id="overlay">
-    <h1>🎯 AIM TRAINER</h1>
-    <p id="overlay-sub">Click targets as fast as you can. Don't miss!</p>
+    <h1>🎯 FPS AIM TRAINER</h1>
+    <p id="overlay-sub">First-person aim. Move the mouse to look, click to shoot.</p>
     <div id="results-area"></div>
-    <div>
-      <p style="font-size:12px;color:#666;text-align:center;margin-bottom:8px;">DIFFICULTY</p>
-      <div id="difficulty">
-        <button class="diff-btn" data-d="easy">Easy</button>
-        <button class="diff-btn active" data-d="medium">Medium</button>
-        <button class="diff-btn" data-d="hard">Hard</button>
+
+    <div class="opt-block">
+      <p class="opt-label">SCENARIO</p>
+      <div id="scenario">
+        <button class="opt-btn" data-s="flick">Flick</button>
+        <button class="opt-btn active" data-s="grid">Gridshot</button>
+        <button class="opt-btn" data-s="tracking">Tracking</button>
       </div>
     </div>
-    <button id="start-btn">Start Game</button>
+
+    <div class="opt-block">
+      <p class="opt-label">DIFFICULTY</p>
+      <div id="difficulty">
+        <button class="opt-btn" data-d="easy">Easy</button>
+        <button class="opt-btn active" data-d="medium">Medium</button>
+        <button class="opt-btn" data-d="hard">Hard</button>
+      </div>
+    </div>
+
+    <div class="opt-block">
+      <p class="opt-label">MOUSE SENSITIVITY <span id="sens-readout">1.00</span></p>
+      <input id="sens-slider" type="range" min="0.2" max="3" step="0.05" value="1" />
+    </div>
+
+    <button id="start-btn">Click to Play</button>
+    <p class="hint">A pointer-lock prompt will appear — your cursor controls the camera.</p>
   </div>
 
+  <!-- Three.js (3D engine) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="game.js"></script>
 </body>
 </html>

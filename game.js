@@ -1,70 +1,291 @@
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const overlay = document.getElementById('overlay');
-const scoreEl = document.getElementById('score-val');
-const accEl = document.getElementById('acc-val');
-const streakEl = document.getElementById('streak-val');
-const reactEl = document.getElementById('react-val');
-const timerEl = document.getElementById('timer-val');
+/* ============================================================================
+ * FPS Aim Trainer
+ * A first-person, pointer-locked aim trainer built on Three.js.
+ *
+ * Unlike a flat "click the circle" trainer, the mouse drives a first-person
+ * camera (yaw/pitch). The crosshair is fixed at screen center, and every shot
+ * is a ray cast from the camera through that center into a 3D room. This is
+ * the same input model as real FPS games (CS, Valorant, Apex, Aim Lab…).
+ * ========================================================================== */
+
+const canvas    = document.getElementById('canvas');
+const overlay   = document.getElementById('overlay');
+const scoreEl    = document.getElementById('score-val');
+const accEl      = document.getElementById('acc-val');
+const streakEl   = document.getElementById('streak-val');
+const reactEl    = document.getElementById('react-val');
+const timerEl    = document.getElementById('timer-val');
 const comboFlash = document.getElementById('combo-flash');
-const missFlash = document.getElementById('miss-flash');
+const hitmarker  = document.getElementById('hitmarker');
+const missFlash  = document.getElementById('miss-flash');
 const resultsArea = document.getElementById('results-area');
+const pauseHint  = document.getElementById('pause-hint');
 
-let W, H, mx = -999, my = -999;
-let targets = [], score = 0, shots = 0, hits = 0, streak = 0, bestStreak = 0;
+// ── Game state ──────────────────────────────────────────────────────────────
+let score = 0, shots = 0, hits = 0, streak = 0, bestStreak = 0;
 let reactionTimes = [], gameActive = false, timeLeft = 30;
-let timerInterval = null, difficulty = 'medium';
-let flashTO = null, spawnTO = null;
+let timerInterval = null, spawnTO = null, flashTO = null, hitTO = null;
+let difficulty = 'medium', scenario = 'grid';
+let sensitivity = 1;
 
-const SETTINGS = {
-  easy:   { minR: 38, maxR: 55, lifeMin: 2200, lifeMax: 3200, maxTargets: 3, spawnInterval: 900 },
-  medium: { minR: 25, maxR: 40, lifeMin: 1600, lifeMax: 2400, maxTargets: 4, spawnInterval: 700 },
-  hard:   { minR: 16, maxR: 28, lifeMin: 900,  lifeMax: 1600, maxTargets: 5, spawnInterval: 500 },
+// Tunables per scenario. `count` = how many targets live at once.
+const DIFF = {
+  easy:   { radius: 0.55, life: 2600, count: 3, trackSpeed: 1.4 },
+  medium: { radius: 0.40, life: 1900, count: 4, trackSpeed: 2.4 },
+  hard:   { radius: 0.28, life: 1300, count: 6, trackSpeed: 3.6 },
 };
 
-// ── Resize ────────────────────────────────────────────────────────────────────
+// ── Three.js scene setup ────────────────────────────────────────────────────
+const ROOM = { w: 24, h: 12, d: 30 };   // room dimensions (x, y, z)
+const WALL_Z = -ROOM.d / 2;             // far wall where targets spawn
 
-function resize() {
-  W = canvas.width = window.innerWidth;
-  H = canvas.height = window.innerHeight;
-}
-resize();
-window.addEventListener('resize', resize);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0d12);
+scene.fog = new THREE.Fog(0x0d0d12, 18, 42);
 
-// ── Difficulty buttons ────────────────────────────────────────────────────────
+const camera = new THREE.PerspectiveCamera(
+  90, window.innerWidth / window.innerHeight, 0.1, 100
+);
+// Player stands near the back of the room, eye height ~1.6m, looking at far wall.
+camera.position.set(0, 0, ROOM.d / 2 - 2);
 
-document.getElementById('difficulty').querySelectorAll('.diff-btn').forEach(b => {
-  b.addEventListener('click', () => {
-    document.querySelectorAll('.diff-btn').forEach(x => x.classList.remove('active'));
-    b.classList.add('active');
-    difficulty = b.dataset.d;
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+
+// Lighting
+scene.add(new THREE.AmbientLight(0x6677aa, 0.6));
+const keyLight = new THREE.DirectionalLight(0xffffff, 0.8);
+keyLight.position.set(5, 10, 8);
+scene.add(keyLight);
+const fillLight = new THREE.PointLight(0x6d8bff, 0.5, 60);
+fillLight.position.set(0, 4, 4);
+scene.add(fillLight);
+
+// ── Build the room (gives the player real FPS depth/orientation cues) ───────
+function buildRoom() {
+  const grid = makeGridTexture();
+  const matWall = new THREE.MeshStandardMaterial({
+    map: grid, color: 0x2a2e3a, roughness: 0.9, metalness: 0.0, side: THREE.BackSide,
   });
+  const box = new THREE.Mesh(new THREE.BoxGeometry(ROOM.w, ROOM.h, ROOM.d), matWall);
+  scene.add(box);
+
+  // A brighter far wall so targets read clearly against it.
+  const farMat = new THREE.MeshStandardMaterial({
+    map: grid, color: 0x363b4d, roughness: 1, metalness: 0,
+  });
+  const farWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.w, ROOM.h), farMat);
+  farWall.position.set(0, 0, WALL_Z + 0.01);
+  scene.add(farWall);
+}
+
+function makeGridTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#222633';
+  g.fillRect(0, 0, 256, 256);
+  g.strokeStyle = 'rgba(120,140,200,0.18)';
+  g.lineWidth = 2;
+  for (let i = 0; i <= 256; i += 32) {
+    g.beginPath(); g.moveTo(i, 0); g.lineTo(i, 256); g.stroke();
+    g.beginPath(); g.moveTo(0, i); g.lineTo(256, i); g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 3);
+  return tex;
+}
+buildRoom();
+
+// ── Targets ─────────────────────────────────────────────────────────────────
+// Each target is a glowing sphere. We keep them in an array and raycast against
+// their meshes when the player shoots.
+const targets = [];
+const targetGeo = new THREE.SphereGeometry(1, 24, 24);
+
+function spawnTarget() {
+  const d = DIFF[difficulty];
+  const mat = new THREE.MeshStandardMaterial({
+    color: 0xff5a5a, emissive: 0xff2a2a, emissiveIntensity: 0.6,
+    roughness: 0.35, metalness: 0.1,
+  });
+  const mesh = new THREE.Mesh(targetGeo, mat);
+  mesh.scale.setScalar(d.radius);
+
+  // Spawn somewhere on the far-wall plane, with margin so they stay visible.
+  const mx = ROOM.w / 2 - 1.5, my = ROOM.h / 2 - 1.5;
+  const x = (Math.random() * 2 - 1) * mx;
+  const y = (Math.random() * 2 - 1) * my;
+  const z = WALL_Z + 0.8 + Math.random() * 1.2;   // slight depth variation
+  mesh.position.set(x, y, z);
+
+  // For tracking mode, give the target a velocity so it drifts across the wall.
+  const ang = Math.random() * Math.PI * 2;
+  const vel = new THREE.Vector3(Math.cos(ang), Math.sin(ang) * 0.6, 0)
+    .multiplyScalar(d.trackSpeed);
+
+  const t = { mesh, born: performance.now(), life: d.life, vel, radius: d.radius };
+  mesh.userData.ref = t;
+  targets.push(t);
+  scene.add(mesh);
+  return t;
+}
+
+function removeTarget(t, fade) {
+  const i = targets.indexOf(t);
+  if (i !== -1) targets.splice(i, 1);
+  scene.remove(t.mesh);
+  t.mesh.material.dispose();
+}
+
+function clearTargets() {
+  while (targets.length) removeTarget(targets[0]);
+}
+
+// ── Pointer-lock first-person look ──────────────────────────────────────────
+// We track yaw (left/right) and pitch (up/down) and rebuild the camera each
+// frame. Pitch is clamped so you can't flip upside down — same as real FPS.
+let yaw = 0, pitch = 0;
+const PITCH_LIMIT = Math.PI / 2 - 0.05;
+
+function onMouseMove(e) {
+  if (!isLocked()) return;
+  // 0.0022 ≈ a sane base radians-per-pixel; sensitivity scales it.
+  const k = 0.0022 * sensitivity;
+  yaw   -= e.movementX * k;
+  pitch -= e.movementY * k;
+  pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pitch));
+}
+
+function applyCameraRotation() {
+  camera.rotation.order = 'YXZ';
+  camera.rotation.y = yaw;
+  camera.rotation.x = pitch;
+}
+
+function isLocked() {
+  return document.pointerLockElement === canvas;
+}
+
+document.addEventListener('mousemove', onMouseMove);
+
+document.addEventListener('pointerlockchange', () => {
+  if (gameActive) {
+    pauseHint.style.opacity = isLocked() ? '0' : '1';
+  }
 });
 
-document.getElementById('start-btn').addEventListener('click', startGame);
+// ── Shooting (raycast from screen center) ───────────────────────────────────
+const raycaster = new THREE.Raycaster();
+const CENTER = new THREE.Vector2(0, 0);   // crosshair is always dead center
 
-// ── Game lifecycle ────────────────────────────────────────────────────────────
+function shoot() {
+  if (!gameActive || !isLocked()) return;
+  shots++;
+  raycaster.setFromCamera(CENTER, camera);
+  const meshes = targets.map(t => t.mesh);
+  const hitList = raycaster.intersectObjects(meshes, false);
 
+  if (hitList.length > 0) {
+    const t = hitList[0].object.userData.ref;
+    const rt = performance.now() - t.born;
+    reactionTimes.push(rt);
+    hits++;
+    score += calcScore(rt);
+    streak++;
+    bestStreak = Math.max(bestStreak, streak);
+    if (streak > 1) showCombo(streak);
+    showHitmarker();
+    removeTarget(t);
+    if (scenario !== 'tracking') spawnTarget();   // keep the field populated
+  } else {
+    streak = 0;
+    showMiss();
+  }
+  updateHUD();
+}
+
+canvas.addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  if (!gameActive) return;
+  if (!isLocked()) { canvas.requestPointerLock(); return; }
+  shoot();
+});
+
+function calcScore(rt) {
+  const base = Math.max(10, Math.round(1000 / (rt / 500)));
+  const mult = difficulty === 'hard' ? 2 : difficulty === 'medium' ? 1.5 : 1;
+  return Math.round(base * mult);
+}
+
+// ── HUD & feedback ──────────────────────────────────────────────────────────
+function updateHUD() {
+  scoreEl.textContent = score;
+  accEl.textContent = shots > 0 ? Math.round((hits / shots) * 100) + '%' : '—';
+  streakEl.textContent = streak;
+  reactEl.textContent = reactionTimes.length > 0
+    ? Math.round(reactionTimes.reduce((a, b) => a + b, 0) / reactionTimes.length) + 'ms'
+    : '—';
+}
+
+function showCombo(n) {
+  comboFlash.textContent = n + 'x STREAK!';
+  comboFlash.style.opacity = '1';
+  clearTimeout(flashTO);
+  flashTO = setTimeout(() => { comboFlash.style.opacity = '0'; }, 700);
+}
+
+function showHitmarker() {
+  hitmarker.style.opacity = '1';
+  hitmarker.style.transform = 'translate(-50%, -50%) scale(1)';
+  clearTimeout(hitTO);
+  hitTO = setTimeout(() => {
+    hitmarker.style.opacity = '0';
+    hitmarker.style.transform = 'translate(-50%, -50%) scale(1.4)';
+  }, 90);
+}
+
+function showMiss() {
+  missFlash.style.opacity = '1';
+  setTimeout(() => { missFlash.style.opacity = '0'; }, 120);
+}
+
+// ── Game lifecycle ──────────────────────────────────────────────────────────
 function startGame() {
   overlay.style.display = 'none';
-  targets = []; score = 0; shots = 0; hits = 0; streak = 0; bestStreak = 0;
+  clearTargets();
+  score = 0; shots = 0; hits = 0; streak = 0; bestStreak = 0;
   reactionTimes = []; timeLeft = 30; gameActive = true;
+  yaw = 0; pitch = 0;
   updateHUD();
+  timerEl.textContent = timeLeft;
+
+  canvas.requestPointerLock();
+
+  // Seed the field.
+  const d = DIFF[difficulty];
+  const seed = scenario === 'flick' ? 1 : d.count;
+  for (let i = 0; i < seed; i++) spawnTarget();
+
   clearInterval(timerInterval);
   timerInterval = setInterval(() => {
     timeLeft--;
     timerEl.textContent = timeLeft;
     if (timeLeft <= 0) endGame();
   }, 1000);
+
   spawnLoop();
-  requestAnimationFrame(loop);
 }
 
 function endGame() {
   gameActive = false;
   clearInterval(timerInterval);
   clearTimeout(spawnTO);
-  targets = [];
+  clearTargets();
+  if (isLocked()) document.exitPointerLock();
+  pauseHint.style.opacity = '0';
 
   const acc = shots > 0 ? Math.round((hits / shots) * 100) : 0;
   const avgRt = reactionTimes.length > 0
@@ -83,186 +304,94 @@ function endGame() {
   overlay.style.display = 'flex';
 }
 
-// ── Spawning ──────────────────────────────────────────────────────────────────
-
+// ── Spawn loop (keeps tracking/flick fields topped up over time) ────────────
 function spawnLoop() {
   if (!gameActive) return;
-  const s = SETTINGS[difficulty];
-  if (targets.length < s.maxTargets) spawnTarget();
-  spawnTO = setTimeout(spawnLoop, s.spawnInterval + Math.random() * 300);
+  const d = DIFF[difficulty];
+  const want = scenario === 'flick' ? 1 : d.count;
+  if (targets.length < want) spawnTarget();
+  spawnTO = setTimeout(spawnLoop, 350);
 }
 
-function spawnTarget() {
-  const s = SETTINGS[difficulty];
-  const r = s.minR + Math.random() * (s.maxR - s.minR);
-  const pad = 60;
-  const x = pad + r + Math.random() * (W - 2 * r - 2 * pad);
-  const y = 60 + r + Math.random() * (H - 60 - 2 * r - pad);
-  const life = s.lifeMin + Math.random() * (s.lifeMax - s.lifeMin);
-  targets.push({ x, y, r, born: performance.now(), life, alpha: 0 });
-}
-
-// ── Input ─────────────────────────────────────────────────────────────────────
-
-canvas.addEventListener('mousemove', e => { mx = e.clientX; my = e.clientY; });
-
-canvas.addEventListener('click', e => {
-  if (!gameActive) return;
-  shots++;
-  const px = e.clientX, py = e.clientY;
-  let hit = false;
-
-  for (let i = targets.length - 1; i >= 0; i--) {
-    const t = targets[i];
-    if (Math.hypot(px - t.x, py - t.y) <= t.r) {
-      const rt = performance.now() - t.born;
-      reactionTimes.push(rt);
-      targets.splice(i, 1);
-      hits++;
-      score += calcScore(rt, t.r);
-      streak++;
-      if (streak > bestStreak) bestStreak = streak;
-      if (streak > 1) showCombo(streak);
-      hit = true;
-      break;
-    }
-  }
-
-  if (!hit) { streak = 0; showMiss(); }
-  updateHUD();
-});
-
-// ── Scoring ───────────────────────────────────────────────────────────────────
-
-function calcScore(rt, r) {
-  const base = Math.max(10, Math.round(1000 / (rt / 500)));
-  const sizeBonus = difficulty === 'hard' ? 2 : difficulty === 'medium' ? 1.5 : 1;
-  return Math.round(base * sizeBonus);
-}
-
-// ── HUD & feedback ────────────────────────────────────────────────────────────
-
-function updateHUD() {
-  scoreEl.textContent = score;
-  accEl.textContent = shots > 0 ? Math.round((hits / shots) * 100) + '%' : '—';
-  streakEl.textContent = streak;
-  reactEl.textContent = reactionTimes.length > 0
-    ? Math.round(reactionTimes.reduce((a, b) => a + b, 0) / reactionTimes.length) + 'ms'
-    : '—';
-}
-
-function showCombo(n) {
-  comboFlash.textContent = n + 'x STREAK!';
-  comboFlash.style.opacity = '1';
-  clearTimeout(flashTO);
-  flashTO = setTimeout(() => { comboFlash.style.opacity = '0'; }, 800);
-}
-
-function showMiss() {
-  missFlash.style.opacity = '1';
-  setTimeout(() => { missFlash.style.opacity = '0'; }, 150);
-}
-
-// ── Render loop ───────────────────────────────────────────────────────────────
-
+// ── Render / update loop ────────────────────────────────────────────────────
+let lastT = performance.now();
 function loop(now) {
-  ctx.clearRect(0, 0, W, H);
-  drawGrid();
+  const dt = Math.min(0.05, (now - lastT) / 1000);
+  lastT = now;
 
+  applyCameraRotation();
+
+  // Update targets: expire by age, move in tracking mode, gentle pulse.
   for (let i = targets.length - 1; i >= 0; i--) {
     const t = targets[i];
     const age = now - t.born;
 
-    if (age < 120) t.alpha = age / 120;
-    else if (age > t.life - 200) t.alpha = Math.max(0, (t.life - age) / 200);
-    else t.alpha = 1;
+    if (gameActive && age >= t.life && scenario !== 'tracking') {
+      removeTarget(t);
+      continue;
+    }
 
-    if (age >= t.life) { targets.splice(i, 1); continue; }
-    drawTarget(t, age / t.life);
+    if (scenario === 'tracking' && gameActive) {
+      t.mesh.position.addScaledVector(t.vel, dt);
+      bounceWithinWall(t);
+    }
+
+    // Spawn pop-in + subtle breathing pulse.
+    const popIn = Math.min(1, age / 120);
+    const pulse = 1 + 0.05 * Math.sin(now / 160);
+    t.mesh.scale.setScalar(t.radius * popIn * pulse);
+
+    // Fade the emissive as it nears expiry (non-tracking) for a fair warning.
+    if (scenario !== 'tracking') {
+      const left = 1 - age / t.life;
+      t.mesh.material.emissiveIntensity = 0.3 + 0.5 * Math.max(0, left);
+    }
   }
 
-  drawCrosshair(mx, my);
-  if (gameActive) requestAnimationFrame(loop);
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
 }
 
-function drawGrid() {
-  ctx.strokeStyle = 'rgba(255,255,255,0.025)';
-  ctx.lineWidth = 1;
-  const step = 60;
-  for (let x = 0; x < W; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke(); }
-  for (let y = 60; y < H; y += step) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke(); }
+function bounceWithinWall(t) {
+  const mx = ROOM.w / 2 - 1.5, my = ROOM.h / 2 - 1.5;
+  const p = t.mesh.position;
+  if (p.x >  mx) { p.x =  mx; t.vel.x *= -1; }
+  if (p.x < -mx) { p.x = -mx; t.vel.x *= -1; }
+  if (p.y >  my) { p.y =  my; t.vel.y *= -1; }
+  if (p.y < -my) { p.y = -my; t.vel.y *= -1; }
 }
 
-function drawTarget(t, pct) {
-  const { x, y, r, alpha } = t;
-  const pulse = 1 + 0.04 * Math.sin(performance.now() / 150);
-  const pr = r * pulse;
+// ── Options UI ──────────────────────────────────────────────────────────────
+document.querySelectorAll('#difficulty .opt-btn').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#difficulty .opt-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    difficulty = b.dataset.d;
+  });
+});
 
-  // Shrink ring
-  ctx.save();
-  ctx.globalAlpha = alpha * 0.5;
-  ctx.strokeStyle = '#f87171';
-  ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(x, y, r * (1 - pct * 0.5), 0, Math.PI * 2); ctx.stroke();
-  ctx.restore();
+document.querySelectorAll('#scenario .opt-btn').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#scenario .opt-btn').forEach(x => x.classList.remove('active'));
+    b.classList.add('active');
+    scenario = b.dataset.s;
+  });
+});
 
-  // Glow
-  ctx.save();
-  ctx.globalAlpha = alpha * 0.18;
-  const g = ctx.createRadialGradient(x, y, 0, x, y, pr * 1.5);
-  g.addColorStop(0, '#f87171'); g.addColorStop(1, 'transparent');
-  ctx.fillStyle = g;
-  ctx.beginPath(); ctx.arc(x, y, pr * 1.5, 0, Math.PI * 2); ctx.fill();
-  ctx.restore();
+const sensSlider = document.getElementById('sens-slider');
+const sensReadout = document.getElementById('sens-readout');
+sensSlider.addEventListener('input', () => {
+  sensitivity = parseFloat(sensSlider.value);
+  sensReadout.textContent = sensitivity.toFixed(2);
+});
 
-  // Body
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.fillStyle = '#1a1a1f';
-  ctx.strokeStyle = '#f87171';
-  ctx.lineWidth = 2.5;
-  ctx.beginPath(); ctx.arc(x, y, pr, 0, Math.PI * 2);
-  ctx.fill(); ctx.stroke();
+document.getElementById('start-btn').addEventListener('click', startGame);
 
-  // Inner rings
-  ctx.strokeStyle = 'rgba(248,113,113,0.5)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(x, y, pr * 0.6, 0, Math.PI * 2); ctx.stroke();
-  ctx.beginPath(); ctx.arc(x, y, pr * 0.25, 0, Math.PI * 2); ctx.stroke();
-
-  // Center dot
-  ctx.fillStyle = '#f87171';
-  ctx.beginPath(); ctx.arc(x, y, pr * 0.12, 0, Math.PI * 2); ctx.fill();
-  ctx.restore();
-
-  // Timer arc
-  ctx.save();
-  ctx.globalAlpha = alpha * 0.8;
-  ctx.strokeStyle = pct < 0.6 ? '#4ade80' : pct < 0.85 ? '#fbbf24' : '#f87171';
-  ctx.lineWidth = 3;
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.arc(x, y, pr + 8, -Math.PI / 2, -Math.PI / 2 + (1 - pct) * Math.PI * 2);
-  ctx.stroke();
-  ctx.restore();
-}
-
-function drawCrosshair(x, y) {
-  if (x < 0) return;
-  const gap = 5, len = 12;
-  ctx.save();
-  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
-  ctx.lineWidth = 1.5;
-  ctx.beginPath();
-  ctx.moveTo(x - gap - len, y); ctx.lineTo(x - gap, y);
-  ctx.moveTo(x + gap, y);       ctx.lineTo(x + gap + len, y);
-  ctx.moveTo(x, y - gap - len); ctx.lineTo(x, y - gap);
-  ctx.moveTo(x, y + gap);       ctx.lineTo(x, y + gap + len);
-  ctx.stroke();
-  ctx.strokeStyle = 'rgba(255,255,255,0.4)';
-  ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(x, y, gap, 0, Math.PI * 2); ctx.stroke();
-  ctx.restore();
-}
+// ── Resize ──────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
 
 requestAnimationFrame(loop);
