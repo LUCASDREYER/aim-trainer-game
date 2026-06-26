@@ -53,31 +53,55 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 
-// Lighting
-scene.add(new THREE.AmbientLight(0x6677aa, 0.6));
-const keyLight = new THREE.DirectionalLight(0xffffff, 0.8);
-keyLight.position.set(5, 10, 8);
+// Lighting — bright + even so every surface of the enclosed stage is visible.
+scene.add(new THREE.HemisphereLight(0x99aaff, 0x2a2030, 0.9));
+scene.add(new THREE.AmbientLight(0x404a66, 0.6));
+const keyLight = new THREE.DirectionalLight(0xffffff, 0.7);
+keyLight.position.set(6, 12, 10);
 scene.add(keyLight);
-const fillLight = new THREE.PointLight(0x6d8bff, 0.5, 60);
-fillLight.position.set(0, 4, 4);
-scene.add(fillLight);
+const ceilLight = new THREE.PointLight(0xaab4ff, 0.8, 60);
+ceilLight.position.set(0, ROOM.h / 2 - 1, 0);
+scene.add(ceilLight);
+const frontLight = new THREE.PointLight(0x88aaff, 0.6, 50);
+frontLight.position.set(0, 2, WALL_Z + 6);
+scene.add(frontLight);
 
-// ── Build the room (gives the player real FPS depth/orientation cues) ───────
+// ── Build the full enclosed stage ───────────────────────────────────────────
+// Six explicitly-lit, inward-facing surfaces (floor, ceiling, 4 walls) so the
+// whole room is visible from any angle — not a single box that goes dark on the
+// faces pointing away from the lights.
 function buildRoom() {
   const grid = makeGridTexture();
-  const matWall = new THREE.MeshStandardMaterial({
-    map: grid, color: 0x2a2e3a, roughness: 0.9, metalness: 0.0, side: THREE.BackSide,
-  });
-  const box = new THREE.Mesh(new THREE.BoxGeometry(ROOM.w, ROOM.h, ROOM.d), matWall);
-  scene.add(box);
 
-  // A brighter far wall so targets read clearly against it.
-  const farMat = new THREE.MeshStandardMaterial({
-    map: grid, color: 0x363b4d, roughness: 1, metalness: 0,
-  });
-  const farWall = new THREE.Mesh(new THREE.PlaneGeometry(ROOM.w, ROOM.h), farMat);
-  farWall.position.set(0, 0, WALL_Z + 0.01);
-  scene.add(farWall);
+  // (geometry, color, position, rotation-euler) for each surface. Each plane's
+  // default normal is +Z; we rotate so it faces into the room.
+  const surfaces = [
+    // Floor — face up
+    { w: ROOM.w, h: ROOM.d, col: 0x20242f, pos: [0, -ROOM.h / 2, 0],          rot: [-Math.PI / 2, 0, 0] },
+    // Ceiling — face down
+    { w: ROOM.w, h: ROOM.d, col: 0x161922, pos: [0, ROOM.h / 2, 0],           rot: [ Math.PI / 2, 0, 0] },
+    // Far wall (target wall) — slightly brighter so targets pop
+    { w: ROOM.w, h: ROOM.h, col: 0x363b4d, pos: [0, 0, WALL_Z],               rot: [0, 0, 0] },
+    // Near wall (behind player) — face -Z
+    { w: ROOM.w, h: ROOM.h, col: 0x262a36, pos: [0, 0, ROOM.d / 2],           rot: [0, Math.PI, 0] },
+    // Left wall — face +X
+    { w: ROOM.d, h: ROOM.h, col: 0x2a2e3a, pos: [-ROOM.w / 2, 0, 0],          rot: [0, Math.PI / 2, 0] },
+    // Right wall — face -X
+    { w: ROOM.d, h: ROOM.h, col: 0x2a2e3a, pos: [ROOM.w / 2, 0, 0],           rot: [0, -Math.PI / 2, 0] },
+  ];
+
+  for (const s of surfaces) {
+    const tex = grid.clone();
+    tex.needsUpdate = true;
+    tex.repeat.set(s.w / 4, s.h / 4);   // keep grid cells roughly square
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex, color: s.col, roughness: 0.95, metalness: 0.0,
+    });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(s.w, s.h), mat);
+    mesh.position.set(...s.pos);
+    mesh.rotation.set(...s.rot);
+    scene.add(mesh);
+  }
 }
 
 function makeGridTexture() {
@@ -98,6 +122,67 @@ function makeGridTexture() {
   return tex;
 }
 buildRoom();
+
+// ── First-person weapon viewmodel ───────────────────────────────────────────
+// A simple low-poly gun built from a few boxes, parented to the camera so it
+// stays pinned to the bottom-right of the view like a real FPS viewmodel.
+// The camera must be in the scene graph for its children to render.
+scene.add(camera);
+
+let weapon, weaponRest = new THREE.Vector3(0.34, -0.30, -0.75);
+let recoil = 0;   // 0..1 kick amount, decays each frame
+
+function buildWeapon() {
+  weapon = new THREE.Group();
+
+  const matBody  = new THREE.MeshStandardMaterial({ color: 0x2b2f38, roughness: 0.5, metalness: 0.7 });
+  const matAccent = new THREE.MeshStandardMaterial({ color: 0x6d4aff, roughness: 0.4, metalness: 0.6, emissive: 0x2a1a66, emissiveIntensity: 0.6 });
+  const matDark  = new THREE.MeshStandardMaterial({ color: 0x16181d, roughness: 0.6, metalness: 0.5 });
+
+  const box = (w, h, d, mat, x, y, z) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+    m.position.set(x, y, z);
+    weapon.add(m);
+    return m;
+  };
+
+  // Receiver / body
+  box(0.18, 0.16, 0.5, matBody, 0, 0, 0);
+  // Barrel
+  box(0.07, 0.07, 0.55, matDark, 0, 0.02, -0.42);
+  // Muzzle tip
+  box(0.09, 0.09, 0.06, matAccent, 0, 0.02, -0.72);
+  // Top rail / sight
+  box(0.05, 0.05, 0.30, matDark, 0, 0.11, -0.05);
+  box(0.03, 0.06, 0.03, matDark, 0, 0.16, 0.08);   // rear sight post
+  // Grip (angled down/back)
+  const grip = box(0.10, 0.26, 0.12, matBody, 0, -0.18, 0.16);
+  grip.rotation.x = 0.35;
+  // Magazine
+  box(0.08, 0.22, 0.10, matDark, 0, -0.20, -0.02);
+  // Accent strip along the body
+  box(0.19, 0.03, 0.30, matAccent, 0, 0.07, -0.02);
+
+  weapon.position.copy(weaponRest);
+  weapon.rotation.y = -0.06;   // toe-in slightly toward center
+  camera.add(weapon);
+}
+buildWeapon();
+
+// Per-frame weapon motion: recoil kick on fire + a subtle idle bob.
+function updateWeapon(now) {
+  if (!weapon) return;
+  recoil = Math.max(0, recoil - 0.08);          // decay the kick
+  const kick = recoil * recoil;                  // ease-out feel
+  const bob = gameActive ? Math.sin(now / 380) * 0.004 : 0;
+  weapon.position.set(
+    weaponRest.x,
+    weaponRest.y + bob + kick * 0.05,            // ride up
+    weaponRest.z + kick * 0.12                   // push back toward camera
+  );
+  weapon.rotation.x = kick * 0.25;               // muzzle climb
+  weapon.rotation.y = -0.06;
+}
 
 // ── Targets ─────────────────────────────────────────────────────────────────
 // Each target is a glowing sphere. We keep them in an array and raycast against
@@ -184,6 +269,7 @@ const CENTER = new THREE.Vector2(0, 0);   // crosshair is always dead center
 function shoot() {
   if (!gameActive || !isLocked()) return;
   shots++;
+  recoil = 1;   // kick the viewmodel; decays in the render loop
   raycaster.setFromCamera(CENTER, camera);
   const meshes = targets.map(t => t.mesh);
   const hitList = raycaster.intersectObjects(meshes, false);
@@ -320,6 +406,7 @@ function loop(now) {
   lastT = now;
 
   applyCameraRotation();
+  updateWeapon(now);
 
   // Update targets: expire by age, move in tracking mode, gentle pulse.
   for (let i = targets.length - 1; i >= 0; i--) {
