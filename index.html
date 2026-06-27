@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>NEONSHOT — FPS Aim Trainer</title>
   <meta name="description" content="A first-person, synthwave FPS aim trainer. Pointer-lock aiming, raycast shooting, persistent personal bests. Runs entirely in your browser." />
 
@@ -52,6 +52,10 @@
   </div>
 
   <div id="pause-hint" class="hide">Click to resume — move to aim · click to fire · <kbd>Esc</kbd> to pause</div>
+
+  <!-- Touch controls (shown only on coarse-pointer devices during a round) -->
+  <button id="fire-btn" class="hide" aria-label="Fire">FIRE</button>
+  <button id="quit-btn" class="hide" aria-label="Quit round">EXIT</button>
 
   <!-- Main menu / results overlay -->
   <div id="overlay">

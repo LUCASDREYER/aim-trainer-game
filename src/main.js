@@ -73,12 +73,81 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 canvas.addEventListener('mousedown', (e) => {
+  if (touchMode) return;                 // touch devices use the touch handlers
   if (e.button !== 0 || !state.playing) return;
   if (!isLocked()) { canvas.requestPointerLock(); return; }
   shoot();
 });
 
 window.addEventListener('resize', () => world.resize());
+
+/* ── Touch / mobile controls ───────────────────────────────────────────────────
+ * Pointer lock doesn't exist on touch devices, so on a coarse pointer we switch
+ * to a mobile control scheme: drag anywhere on the view to look, a quick tap (or
+ * the on-screen FIRE button) to shoot, and an EXIT button to bail out early.   */
+const touchMode =
+  window.matchMedia('(pointer: coarse)').matches ||
+  ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+
+const fireBtn = document.getElementById('fire-btn');
+const quitBtn = document.getElementById('quit-btn');
+const TOUCH_SENS = 1.6;                   // touch drags feel better a bit faster
+
+let lookId = null, lastX = 0, lastY = 0, startT = 0, moved = 0;
+
+if (touchMode) {
+  document.body.classList.add('touch');
+
+  canvas.addEventListener('touchstart', (e) => {
+    if (!state.playing) return;
+    if (lookId === null) {
+      const t = e.changedTouches[0];
+      lookId = t.identifier;
+      lastX = t.clientX; lastY = t.clientY;
+      startT = performance.now(); moved = 0;
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', (e) => {
+    if (!state.playing || lookId === null) return;
+    for (const t of e.changedTouches) {
+      if (t.identifier !== lookId) continue;
+      const dx = t.clientX - lastX, dy = t.clientY - lastY;
+      lastX = t.clientX; lastY = t.clientY;
+      moved += Math.hypot(dx, dy);
+      world.addLook(dx, dy, state.sensitivity * TOUCH_SENS);
+    }
+    e.preventDefault();
+  }, { passive: false });
+
+  const endTouch = (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier !== lookId) continue;
+      // A short, near-stationary touch counts as a tap-to-fire.
+      if (state.playing && moved < 14 && performance.now() - startT < 260) shoot();
+      lookId = null;
+    }
+  };
+  canvas.addEventListener('touchend', endTouch, { passive: false });
+  canvas.addEventListener('touchcancel', () => { lookId = null; }, { passive: false });
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  fireBtn.addEventListener('touchstart', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (state.playing) shoot();
+  }, { passive: false });
+
+  quitBtn.addEventListener('touchstart', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (state.playing) endGame();
+  }, { passive: false });
+
+  // Tailor the menu copy for touch.
+  const hint = document.querySelector('.footer-row .hint');
+  if (hint) hint.textContent = 'Drag to aim · tap or FIRE to shoot · best in landscape.';
+  ui.el.start.textContent = 'Tap to Play';
+}
 
 // ── Game lifecycle ─────────────────────────────────────────────────────────────
 function startGame() {
@@ -98,7 +167,12 @@ function startGame() {
   ui.setTimer(timeLeft);
   ui.el.start.textContent = 'Run It Back';
 
-  canvas.requestPointerLock();
+  if (touchMode) {
+    fireBtn.classList.remove('hide');
+    quitBtn.classList.remove('hide');
+  } else {
+    canvas.requestPointerLock();
+  }
 
   // seed the field
   const seed = state.scenario === 'flick' ? 1 : DIFF[state.difficulty].count;
@@ -123,6 +197,9 @@ function endGame() {
   targets.clear();
   if (isLocked()) document.exitPointerLock();
   ui.setPaused(false);
+  lookId = null;
+  fireBtn.classList.add('hide');
+  quitBtn.classList.add('hide');
 
   const run = {
     scenario: state.scenario,
