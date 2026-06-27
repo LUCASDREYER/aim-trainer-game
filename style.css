@@ -44,7 +44,10 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-#canvas { display: block; cursor: crosshair; }
+#canvas { display: block; cursor: crosshair; touch-action: none; }
+
+/* Kill mobile scroll / pull-to-refresh / double-tap zoom on the play surface */
+body.touch { touch-action: none; overscroll-behavior: none; }
 
 .hide { display: none !important; }
 .mono { font-variant-numeric: tabular-nums; }
@@ -318,10 +321,42 @@ input[type="range"]::-moz-range-thumb {
 .rec-table .num { color: var(--cyan-soft); font-family: var(--font-display); }
 .empty-note { font-size: 13px; color: var(--ink-faint); text-align: center; padding: 12px; }
 
+/* ── Touch controls ────────────────────────────────────────────────────────── */
+#fire-btn, #quit-btn {
+  position: absolute; z-index: 27; -webkit-tap-highlight-color: transparent;
+  font-family: var(--font-display); font-weight: 700; letter-spacing: 2px;
+  border-radius: 50%; cursor: pointer; user-select: none; touch-action: none;
+}
+#fire-btn {
+  right: max(24px, env(safe-area-inset-right)); bottom: 96px;
+  width: 96px; height: 96px; font-size: 16px; color: #1a0010;
+  background: radial-gradient(circle at 50% 38%, var(--pink-soft), var(--pink));
+  border: 2px solid rgba(255,255,255,.5);
+  box-shadow: 0 0 22px rgba(255,46,136,.7), inset 0 0 18px rgba(255,255,255,.3);
+}
+#fire-btn:active { transform: scale(.93); box-shadow: 0 0 34px rgba(255,46,136,.95); }
+#quit-btn {
+  left: max(20px, env(safe-area-inset-left)); top: max(20px, env(safe-area-inset-top));
+  width: 54px; height: 54px; font-size: 11px; color: var(--ink-dim);
+  background: rgba(11,4,30,.6); border: 1px solid var(--line);
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+}
+#quit-btn:active { color: var(--pink); border-color: var(--pink); }
+
 /* ── Responsive ────────────────────────────────────────────────────────────── */
 @media (max-width: 540px) {
   .results-grid { grid-template-columns: repeat(2, 1fr); }
-  .panel { padding: 26px 20px; }
-  #hud .stat { min-width: 62px; padding: 4px 8px; }
-  .stat-val { font-size: 20px; }
+  .panel { padding: 26px 20px; gap: 16px; }
+  #hud { bottom: 14px; gap: 0; padding: 8px 4px; }
+  #hud .stat { min-width: 56px; padding: 4px 8px; }
+  .stat-val { font-size: 18px; }
+  .stat-label { font-size: 8px; letter-spacing: 1px; }
+  .logo { font-size: clamp(34px, 11vw, 50px); }
+}
+
+/* Short / landscape phones: let the menu scroll and tighten the layout. */
+@media (max-height: 560px) {
+  #overlay { align-items: flex-start; overflow-y: auto; }
+  .panel { margin: auto; }
+  #fire-btn { width: 82px; height: 82px; bottom: 18px; }
 }
