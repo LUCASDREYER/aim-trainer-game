@@ -3,16 +3,34 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>FPS Aim Trainer</title>
+  <title>NEONSHOT — FPS Aim Trainer</title>
+  <meta name="description" content="A first-person, synthwave FPS aim trainer. Pointer-lock aiming, raycast shooting, persistent personal bests. Runs entirely in your browser." />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Chakra+Petch:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
+
+  <!-- Three.js is vendored locally (no external CDN at runtime → fully
+       self-contained and deployable anywhere). The import map lets app code
+       use the clean `import * as THREE from 'three'` specifier. -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "./vendor/three.module.min.js"
+    }
+  }
+  </script>
 </head>
 <body>
-
-  <!-- 3D scene renders here -->
   <canvas id="canvas"></canvas>
 
+  <!-- CRT atmosphere -->
+  <div id="scanlines" aria-hidden="true"></div>
+  <div id="vignette" aria-hidden="true"></div>
+
   <!-- Fixed first-person crosshair -->
-  <div id="crosshair">
+  <div id="crosshair" aria-hidden="true">
     <span class="ch-line ch-up"></span>
     <span class="ch-line ch-down"></span>
     <span class="ch-line ch-left"></span>
@@ -20,74 +38,77 @@
     <span class="ch-dot"></span>
   </div>
 
-  <!-- Muzzle flash / hitmarker -->
-  <div id="hitmarker">
-    <span></span><span></span><span></span><span></span>
-  </div>
-  <div id="miss-flash"></div>
+  <div id="hitmarker" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+  <div id="miss-flash" aria-hidden="true"></div>
+  <div id="combo-flash" aria-hidden="true"></div>
 
-  <div id="hud">
-    <div class="stat">
-      <span class="stat-label">Score</span>
-      <span class="stat-val" id="score-val">0</span>
-    </div>
-    <div class="stat">
-      <span class="stat-label">Accuracy</span>
-      <span class="stat-val" id="acc-val">—</span>
-    </div>
-    <div class="stat">
-      <span class="stat-label">Streak</span>
-      <span class="stat-val" id="streak-val">0</span>
-    </div>
-    <div class="stat">
-      <span class="stat-label">Avg ms</span>
-      <span class="stat-val" id="react-val">—</span>
-    </div>
-    <div class="stat">
-      <span class="stat-label">Time</span>
-      <span class="stat-val" id="timer-val">30</span>
-    </div>
+  <!-- In-game HUD (bottom dock) -->
+  <div id="hud" class="hide">
+    <div class="stat"><span class="stat-label">Score</span><span class="stat-val" id="score-val">0</span></div>
+    <div class="stat"><span class="stat-label">Accuracy</span><span class="stat-val" id="acc-val">—</span></div>
+    <div class="stat"><span class="stat-label">Streak</span><span class="stat-val" id="streak-val">0</span></div>
+    <div class="stat"><span class="stat-label">Avg ms</span><span class="stat-val" id="react-val">—</span></div>
+    <div class="stat stat--time"><span class="stat-label">Time</span><span class="stat-val" id="timer-val">30</span></div>
   </div>
 
-  <div id="combo-flash"></div>
+  <div id="pause-hint" class="hide">Click to resume — move to aim · click to fire · <kbd>Esc</kbd> to pause</div>
 
-  <!-- Shown while playing but pointer-lock dropped (e.g. pressed Esc) -->
-  <div id="pause-hint">Click to resume — move mouse to aim, click to shoot</div>
-
+  <!-- Main menu / results overlay -->
   <div id="overlay">
-    <h1>🎯 FPS AIM TRAINER</h1>
-    <p id="overlay-sub">First-person aim. Move the mouse to look, click to shoot.</p>
-    <div id="results-area"></div>
+    <div class="panel">
+      <header class="brand">
+        <h1 class="logo" data-text="NEONSHOT">NEONSHOT</h1>
+        <p class="tagline" id="overlay-sub">First-person aim trainer</p>
+      </header>
 
-    <div class="opt-block">
-      <p class="opt-label">SCENARIO</p>
-      <div id="scenario">
-        <button class="opt-btn" data-s="flick">Flick</button>
-        <button class="opt-btn active" data-s="grid">Gridshot</button>
-        <button class="opt-btn" data-s="tracking">Tracking</button>
+      <div id="results-area"></div>
+
+      <div class="config">
+        <div class="field">
+          <label class="field-label">Scenario</label>
+          <div class="seg" id="scenario"></div>
+          <p class="field-hint" id="scenario-blurb"></p>
+        </div>
+
+        <div class="field">
+          <label class="field-label">Difficulty</label>
+          <div class="seg" id="difficulty"></div>
+        </div>
+
+        <div class="field">
+          <label class="field-label">Sensitivity <span class="mono" id="sens-readout">1.00</span></label>
+          <input id="sens-slider" type="range" min="0.2" max="3" step="0.05" value="1" />
+        </div>
+
+        <div id="best-badge" class="best-badge hide">
+          <span class="best-badge-label">Personal best</span>
+          <span class="best-badge-val" id="best-score">—</span>
+        </div>
+      </div>
+
+      <button id="start-btn" class="btn btn--primary">Enter the Grid</button>
+
+      <div class="footer-row">
+        <button id="stats-btn" class="btn btn--ghost">Stats &amp; Records</button>
+        <span class="hint">Pointer-lock prompt appears on start.</span>
       </div>
     </div>
-
-    <div class="opt-block">
-      <p class="opt-label">DIFFICULTY</p>
-      <div id="difficulty">
-        <button class="opt-btn" data-d="easy">Easy</button>
-        <button class="opt-btn active" data-d="medium">Medium</button>
-        <button class="opt-btn" data-d="hard">Hard</button>
-      </div>
-    </div>
-
-    <div class="opt-block">
-      <p class="opt-label">MOUSE SENSITIVITY <span id="sens-readout">1.00</span></p>
-      <input id="sens-slider" type="range" min="0.2" max="3" step="0.05" value="1" />
-    </div>
-
-    <button id="start-btn">Click to Play</button>
-    <p class="hint">A pointer-lock prompt will appear — your cursor controls the camera.</p>
   </div>
 
-  <!-- Three.js (3D engine) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-  <script src="game.js"></script>
+  <!-- Stats modal -->
+  <div id="stats-modal" class="modal hide">
+    <div class="modal-card">
+      <header class="modal-head">
+        <h2>Stats &amp; Records</h2>
+        <button id="stats-close" class="icon-btn" aria-label="Close">✕</button>
+      </header>
+      <div id="stats-body"></div>
+      <footer class="modal-foot">
+        <button id="stats-reset" class="btn btn--ghost btn--danger">Reset all data</button>
+      </footer>
+    </div>
+  </div>
+
+  <script type="module" src="src/main.js"></script>
 </body>
 </html>
